@@ -1,14 +1,29 @@
 from cmd import PROMPT
-import urllib.request
-import http.client
-import json
 from krita import *
 from PyQt5.Qt import QByteArray
 from PyQt5.QtGui  import QImage, QPixmap
-import array
 from copy import copy
 from pathlib import Path
+import sys
+from pathlib import Path
+import asyncio
+import json
 
+
+
+if 'stable_diffusion_krita.grpc' in sys.modules:
+    del sys.modules["stable_diffusion_krita.grpc"]    
+from stable_diffusion_krita.grpc import grpcClient
+
+if 'stable_diffusion_krita.rest' in sys.modules:
+    del sys.modules["stable_diffusion_krita.rest"]    
+from stable_diffusion_krita.rest import restClient
+
+
+host = 'localhost'
+server_port = 50051
+# instantiate a channel
+#channel = grpc.insecure_channel(            '{}:{}'.format(host, server_port))
 # Stable Diffusion Plugin fpr Krita
 # (C) 2022, Nicolay Mausz
 # MIT License
@@ -43,7 +58,10 @@ class ModifierData:
 class SDConfig:
     "This is Stable Diffusion Plugin Main Configuration"     
     url = "http://localhost:5000"
-    type="Colab"
+    type="SDGRPC"
+    token=""
+    model="stable-diffusion-v1-4"
+    engines=[]
     inpaint_mask_blur=4
     inpaint_mask_content="latent noise"     
     width=512
@@ -63,7 +81,7 @@ class SDConfig:
 
 
     def serialize(self):
-        obj={"url":self.url,"type":self.type,
+        obj={"url":self.url,"type":self.type,"token":self.token,"model":self.model,"engines":self.engines,
         "inpaint_mask_blur":self.inpaint_mask_blur, "inpaint_mask_content":self.inpaint_mask_content,
         "width":self.width, "height":self.height,
         "type": self.type,
@@ -72,7 +90,10 @@ class SDConfig:
     def unserialize(self,str):
         obj=json.loads(str)
         self.url=obj.get("url","http://localhost:7860")
-        self.type=obj.get("type","Colab")
+        self.type=obj.get("type","SDGRPC")
+        self.token=obj.get("token","")
+        self.model=obj.get("model","")
+        self.engines=obj.get("engines",[])
         self.dlgData=obj["dlgData"]
         self.inpaint_mask_blur=obj.get("inpaint_mask_blur",4)
         self.inpaint_mask_content=obj.get("inpaint_mask_content","latent noise")
@@ -98,20 +119,25 @@ SDConfig.load(SDConfig)
 class SDParameters:
     "This is Stable Diffusion Parameter Class"     
     prompt = ""
+    negativePrompt=""
     steps = 0
     seed = 0
     num =0
     strength=1.0
+    model="stable-diffusion-v1-4"
     sampling_method="LMS",
     seedList =["","","",""]
     imageDialog = None
     regenerate = False
     image64=""
+    imageBinary=None
     maskImage64=""
+    maskImageBinary=None
     sampling_method="LMS"
     inpaint_mask_blur=4
     inpaint_mask_content="latent noise" 
     mode="txt2img"
+    cfg_value=7.5
     strength = 1 
     tiling = False
     restore_faces =False 
@@ -125,33 +151,46 @@ def errorMessage(text,detailed):
     msgBox.setStyleSheet("QLabel{min-width: 700px;}")
     msgBox.exec()
 
-
+engines=[]
 class SDConfigDialog(QDialog):
     def __init__(self):
         super().__init__(None)
+        if (not SDConfig.engines): SDConfig.engines=[]
         self.setWindowTitle("Stable Diffusion Configuration")
         QBtn = QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         self.buttonBox = QDialogButtonBox(QBtn)
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
         self.layout = QVBoxLayout()
-        link_label=QLabel('Webservice URL<br>\nYou need running <a href="https://colab.research.google.com/drive/1eq-VF2dRHgxNjtPX5iZbDPuwtfJIEhtx#scrollTo=bYpxm4Fw2tLT">Colab with new API</a><br>\nCheck if web interface is working there before you use this plugin. Use http://xxxx.ngrok.io link here.')
+        self.type = QComboBox()
+        self.layout.addWidget(QLabel('Type'))
+        self.type.addItems(['SDGRPC', 'SDCloud',"SDLocal"])
+        self.type.setCurrentText(SDConfig.type)
+        self.layout.addWidget(self.type,stretch=1)              
+        link_label=QLabel('Webservice URL (only SDGRPC or SDLocal)')
         link_label.setOpenExternalLinks(True)
         self.layout.addWidget(link_label)
         self.url = QLineEdit()
         self.url.setText(SDConfig.url)    
         self.layout.addWidget(self.url)
- #       self.layout.addWidget(QLabel('Type'))
- #       self.type = QComboBox()
- #       self.type.addItems(['Colab', 'Local'])
-#        self.type.setCurrentText(SDConfig.type)
-#        self.layout.addWidget(self.type,stretch=1)      
-        self.layout.addWidget(QLabel('For local version you need this fork running <br> <a href="https://github.com/imperator-maximus/stable-diffusion-webui">imperator-maximus/stable-diffusion-webui</a><br>\n start api.bat there'))
+        self.layout.addWidget(QLabel('Auth-Key (only SDCloud or SDGRPC)'))
+        self.token = QLineEdit()
+        self.token.setText(SDConfig.token)    
+        self.layout.addWidget(self.token)      
+        self.layout.addWidget(QLabel(''))
+        self.layout.addWidget(QLabel('Model (SDCloud or SDGRPC) - refresh list by reopen dialog'))
+        self.model = QComboBox()
+        self.model.addItems(SDConfig.engines)
+        self.model.setCurrentText(SDConfig.model)
+        self.layout.addWidget(self.model,stretch=1) 
+
+
+#        self.layout.addWidget(QLabel('For local version you need this fork running <br> <a href="https://github.com/imperator-maximus/stable-diffusion-webui">imperator-maximus/stable-diffusion-webui</a><br>\n start api.bat there'))
 
         self.layout.addWidget(QLabel(''))
         
 
-        inpainting_label=QLabel('Inpainting options')
+        inpainting_label=QLabel('Inpainting options (only SDLocal)')
         inpainting_label.setToolTip('You can play around with these two values. Default is 4 and "latent noise"')
         self.layout.addWidget(inpainting_label)
         h_layout_inpaint=QHBoxLayout()
@@ -191,12 +230,24 @@ class SDConfigDialog(QDialog):
         self.resize(500,200)
     def save(self):
         SDConfig.url=self.url.text()
+        SDConfig.token=self.token.text()
         SDConfig.inpaint_mask_blur=int(self.inpaint_mask_blur.text())
         SDConfig.inpaint_mask_content=self.inpaint_mask_content.currentText()
         SDConfig.width=int(self.width.text())
         SDConfig.height=int(self.height.text())
-     #   SDConfig.type=self.type.currentText()
-
+        SDConfig.type=self.type.currentText()
+        if (SDConfig.type=="SDGRPC"):
+            client=grpcClient(SDConfig,"")
+            model=self.model.currentText()
+            if (not model): model="stable-diffusion-v1-4"
+            SDConfig.model=model
+            SDConfig.engines=asyncio.run(client.getModels())
+        if (SDConfig.type=="SDCloud"):
+            client=grpcClient(SDConfig,'https://grpc.stability.ai:443')
+            model=self.model.currentText()
+            if (not model): model="stable-diffusion-v1-5"
+            SDConfig.model=model
+            SDConfig.engines=asyncio.run(client.getModels())
         SDConfig.save(SDConfig)
 
 class ModifierDialog(QDialog):
@@ -320,23 +371,24 @@ class SDDialog(QDialog):
         formLayout.addWidget(self.prompt)
         self.modifiers= ModifierDialog.modifierInput(self,formLayout)
         if (data["mode"] in ("img2img", "inpainting")):
-            formLayout.addWidget(QLabel("Denoising Strength"))        
-            self.strength=self.addSlider(formLayout,data["strength"]*100,0,100,1,100)
+            if (not SDConfig.type=="SDGRPC" or data["mode"]=="img2img"):
+                formLayout.addWidget(QLabel("Denoising Strength"))        
+                self.strength=self.addSlider(formLayout,data["strength"]*100,0,100,1,100)
 
         steps_label=QLabel("Steps")
         steps_label.setToolTip("more steps = slower but often better quality. Recommendation start with lower step like 15 and update in image overview with higher one like 50")
        
         formLayout.addWidget(steps_label)        
         self.steps=self.addSlider(formLayout,data["steps"],1,250,5,1)
-
-        checkBoxLayout = QHBoxLayout()
-        self.restore_faces= QCheckBox("Restore Faces")
-        self.restore_faces.setChecked(data.get("restore_faces",False))
-        checkBoxLayout.addWidget(self.restore_faces)
-        self.tiling= QCheckBox("Tiling")
-        self.tiling.setChecked(data.get("tiling",False))
-        checkBoxLayout.addWidget(self.tiling)
-        formLayout.addLayout(checkBoxLayout)
+        if SDConfig.type=="SDLocal" and mode=="txt2img":
+            checkBoxLayout = QHBoxLayout()
+            self.restore_faces= QCheckBox("Restore Faces")
+            self.restore_faces.setChecked(data.get("restore_faces",False))
+            checkBoxLayout.addWidget(self.restore_faces)
+            self.tiling= QCheckBox("Tiling")
+            self.tiling.setChecked(data.get("tiling",False))
+            checkBoxLayout.addWidget(self.tiling)
+            formLayout.addLayout(checkBoxLayout)
         formLayout.addWidget(QLabel("Number images"))        
         self.num=self.addSlider(formLayout,data["num"],1,4,1,1)
 
@@ -399,11 +451,13 @@ class SDDialog(QDialog):
         SDConfig.dlgData["cfg_value"]=self.cfg_value.value()/10
         SDConfig.dlgData["modifiers"]=self.modifiers.toPlainText()
         SDConfig.dlgData["sampling_method"]=self.sampling_method.currentText()
-        SDConfig.dlgData["tiling"]=self.tiling.isChecked()
-        SDConfig.dlgData["restore_faces"]=self.restore_faces.isChecked()
+        if (SDConfig.type=="SDLocal" and SDConfig.dlgData["mode"]=="txt2img"):
+            SDConfig.dlgData["tiling"]=self.tiling.isChecked()
+            SDConfig.dlgData["restore_faces"]=self.restore_faces.isChecked()
 
         if SDConfig.dlgData["mode"] in ("img2img", "inpainting"):
-            SDConfig.dlgData["strength"]=self.strength.value()/100
+            if (not SDConfig.type=="SDGRPC" or SDConfig.dlgData["mode"] =="img2img"):
+                SDConfig.dlgData["strength"]=self.strength.value()/100
         SDConfig.save(SDConfig)
 # put image in Krita on new layer or existing one
 def selectImage(p: SDParameters,qImg):  
@@ -507,8 +561,9 @@ class showImages(QDialog):
         self.steps_update=SDDialog.addSlider(self,top_layout,SDConfig.dlgData.get("steps_update",50),1,250,5,1)
         
         if (p.mode in ("img2img", "inpainting")):
-            top_layout.addWidget(QLabel("Update with new Strengths value"))
-            self.strength_update=SDDialog.addSlider(self,top_layout,SDConfig.dlgData.get("strength",0.5)*100,0,100,1,100)
+            if (not SDConfig.type=="SDGRPC" or p.mode =="img2img"):
+                top_layout.addWidget(QLabel("Update with new Strengths value"))
+                self.strength_update=SDDialog.addSlider(self,top_layout,SDConfig.dlgData.get("strength",0.5)*100,0,100,1,100)
 
         self.setLayout(top_layout)
 
@@ -548,7 +603,8 @@ class showImages(QDialog):
         p = copy(self.SDParam)
         p.seed=p.seedList[num]
         if (p.mode in ("img2img", "inpainting")): 
-            p.strength=self.strength_update.value()/100
+            if (not SDConfig.type=="SDGRPC" or p.mode =="img2img"):
+                p.strength=self.strength_update.value()/100
         SDConfig.dlgData["steps_update"]=self.steps_update.value()
         SDConfig.save(SDConfig)
         p.num=1
@@ -573,95 +629,20 @@ def imageResultDialog(qImgs,p):
     if dlg.exec():
         print("HQ Update here")
 
- 
- # convert image from server result into QImage
-def base64ToQImage(data):
-  #   data=data.split(",")[1] # get rid of data:image/png,
-     image64 = data.encode('ascii')
-     imagen = QtGui.QImage()
-     bytearr = QtCore.QByteArray.fromBase64( image64 )
-     imagen.loadFromData( bytearr, 'PNG' )      
-     return imagen
-
-def getServerData(reqData):
-    endpoint=SDConfig.url
-    endpoint=endpoint.strip("/")
-    endpoint+="/api/" 
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }    
-    try:
-        req = urllib.request.Request(endpoint, reqData, headers)
-        with urllib.request.urlopen(req) as f:
-            res = f.read()
-            return res
-    except http.client.IncompleteRead as e:
-        print("Incomplete Read Exception - better restart Colab or ")
-        res = e.partial 
-        return res           
-    except Exception as e:
-        error_message = traceback.format_exc() 
-        errorMessage("Server Error","Endpoint: "+endpoint+", Reason: "+error_message)        
-        return None
-
 
 def runSD(p: SDParameters):
-    # dramatic interface change needed!
-    Colab=True
-    if (SDConfig.type=="Local"): Colab=False
-    if (not p.seed): seed=-1
-    else: seed=int(p.seed)
-    inpainting_fill_options= ['fill', 'original', 'latent noise', 'latent nothing',"g-diffusion"]
-    inpainting_fill=inpainting_fill_options.index(SDConfig.inpaint_mask_content)
-    print(inpainting_fill)
-    j = {'prompt': p.prompt, 
-        'mode': p.mode, 
-        'initimage': {'image':p.image64, 'mask':p.maskImage64}, 
-        'steps':p.steps, 
-        'sampler':p.sampling_method, 
-        'mask_blur': SDConfig.inpaint_mask_blur, 
-        'inpainting_fill':inpainting_fill, 
-        'tiling':p.tiling,
-        'restore_faces':p.restore_faces,
-        'use_gfpgan': False, 
-        'batch_count': p.num, 
-        'cfg_scale': p.cfg_value, 
-        'denoising_strength': p.strength, 
-        'seed':seed, 
-        'height':SDConfig.height, 
-        'width':SDConfig.width, 
-        'resize_mode': 0, 
-        'upscaler':'RealESRGAN', 
-        'upscale_overlap':64, 
-        'inpaint_full_res':True, 
-        'inpainting_mask_invert': 0 
-        }    
-
-    print(j)
-    data = json.dumps(j).encode("utf-8")
-    res=getServerData(data)
-    if not res: return    
-    response=json.loads(res)
-  #  print(response)
-    images = [0]*p.num
-    p.seedList=[0]*p.num
-    s=response["info"]
-    info=json.loads(s)
-
-    firstSeed=int(info["seed"])
-    if (p.num==1):
-        data = response["images"][0] # first image
-        p.seedList[0]=str(int(firstSeed))
-        images[0]=base64ToQImage(data)
+    # finally the long waited interface change is here!
+    if (SDConfig.type=="SDGRPC"):
+        client=grpcClient(SDConfig,"")
+        images=asyncio.run(client.runSD(p))
+    elif (SDConfig.type=="SDCloud"):
+        client=grpcClient(SDConfig,'https://grpc.stability.ai:443')
+        images=asyncio.run(client.runSD(p))        
     else:
-        for i in range(0,p.num):
-            data = response["images"][i+1] # first image
-            p.seedList[i]=str(int(firstSeed)+i)
-            images[i]=base64ToQImage(data)
+        client=restClient(SDConfig)
+        images=client.runSD(p)
     if (p.imageDialog):                 # only refresh image
         if (p.regenerate):
-            print("generate new")
             p.imageDialog.updateImages(images,p.seedList)
         else:  
             p.imageDialog.updateImage(images[0])
@@ -691,7 +672,7 @@ def getFullPrompt(dlg):
     list=dlg.modifiers.toPlainText().split("\n")
     for i in range(0,len(list)):
         m=list[i]
-        if (m and m[0]!="#"): modifiers+=", "+m
+        if (m and m[0]!="#" and m[0]!="-"): modifiers+=", "+m
 
    # modifiers=dlg.modifiers.toPlainText().replace("\n", ", ")
     prompt=dlg.prompt.text()
@@ -700,6 +681,13 @@ def getFullPrompt(dlg):
         return ""
     prompt+=modifiers
     return prompt
+def getNegativePrompt(dlg):
+    negativePrompt=""
+    list=dlg.modifiers.toPlainText().split("\n")
+    for i in range(0,len(list)):
+        m=list[i]
+        if (m and m[0]=="-"): negativePrompt+=", "+m
+    return negativePrompt
 
 def TxtToImage():
     s=getSelection()
@@ -711,7 +699,8 @@ def TxtToImage():
         dlg.setDlgData()
         p = SDParameters()
         p.prompt=getFullPrompt(dlg)
-        if not p.prompt: return        
+        if not p.prompt: return       
+        p.negativePrompt=getNegativePrompt(dlg)
         p.mode="txt2img"
         data=SDConfig.dlgData
         p.steps=data["steps"]
@@ -732,10 +721,11 @@ def ImageToImage():
     data=n.pixelData(s.x(),s.y(),s.width(),s.height())
     image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
     if (s.width()>512 or s.height()>512):   # max 512x512
-        image = image.scaled(512,512, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        image = image.scaled(512,512, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
     data = QByteArray()
     buf = QBuffer(data)
     image.save(buf, 'PNG')
+    imageBinary=data.data()
     ba=data.toBase64()
     DataAsString=str(ba,"ascii")
     image64 = "data:image/png;base64,"+DataAsString
@@ -749,15 +739,18 @@ def ImageToImage():
         p = SDParameters()
         p.prompt=getFullPrompt(dlg)
         if not p.prompt: return
+        p.negativePrompt=getNegativePrompt(dlg)
         data=SDConfig.dlgData
-        p.mode="img2img"
+        p.mode="img2img"        
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
         p.restore_faces=data["restore_faces"]
+        p.sampling_method=data["sampling_method"]
         p.tiling=data["tiling"]        
         p.cfg_value=data["cfg_value"]
         p.image64=image64
+        p.imageBinary=imageBinary
         p.strength=data["strength"]
         images = runSD(p)
         imageResultDialog( images,p)
@@ -768,7 +761,8 @@ def Inpainting():
     if (n==None):  return    
     s=getSelection()
     if (s==None):   return
-    data=n.pixelData(s.x(),s.y(),s.width(),s.height())
+    d = getDocument()
+    data=d.pixelData(s.x(),s.y(),s.width(),s.height())
     image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
 
     image = image.scaled(512,512, Qt.KeepAspectRatio, Qt.SmoothTransformation)        # not using config here
@@ -776,6 +770,7 @@ def Inpainting():
     data = QByteArray()
     buf = QBuffer(data)
     image.save(buf, 'PNG')
+    imageBinary=data.data()
     ba=data.toBase64()
     DataAsString=str(ba,"ascii")
     #image64 = "data:image/png;base64,"+DataAsString
@@ -806,6 +801,7 @@ def Inpainting():
     buf = QBuffer(data)
     maskImage.save(buf, 'PNG')
     ba=data.toBase64()
+    maskImageBinary=data.data()
     DataAsString=str(ba,"ascii")
    # maskImage64 = "data:image/png;base64,"+DataAsString
     maskImage64 =DataAsString
@@ -818,6 +814,7 @@ def Inpainting():
         dlg.setDlgData()
         p = SDParameters()
         p.prompt=getFullPrompt(dlg)
+        p.negativePrompt=getNegativePrompt(dlg)
         if not p.prompt: return        
         data=SDConfig.dlgData
         p.mode="inpainting"
@@ -828,8 +825,11 @@ def Inpainting():
         p.tiling=data["tiling"]
         p.cfg_value=data["cfg_value"]
         p.strength=data["strength"]
+        p.sampling_method=data["sampling_method"]
         p.image64=image64
+        p.imageBinary=imageBinary
         p.maskImage64=maskImage64
+        p.maskImageBinary=maskImageBinary
         images = runSD(p)
         imageResultDialog( images,p)
 

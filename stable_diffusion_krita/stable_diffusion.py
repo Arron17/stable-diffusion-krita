@@ -11,7 +11,7 @@ class SDDocker(DockWidget):
         mainWidget.setLayout(QVBoxLayout())
         btnFromText = QPushButton("From Text", mainWidget)
         btnFromImage = QPushButton("From Image", mainWidget)
-        btnInpaint = QPushButton("Inpaint", mainWidget)
+        btnInpaint = QPushButton("In-/Outpaint", mainWidget)
         btnConfig = QPushButton("", mainWidget)
         btnSelection = QPushButton("", mainWidget)
 
