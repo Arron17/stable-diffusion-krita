@@ -82,6 +82,17 @@ class grpcClient:
         if (p.mode=="inpainting" or p.mode=="inpainting_original"):
             if (p.maskImage64):                
                 adjustments: List[generation.ImageAdjustment] = []
+
+                adjustment=generation.ImageAdjustment(
+                    levels=generation.ImageAdjustment_Levels(
+                        input_low=0,
+                        input_high=0.01,
+                        output_low=0,
+                        output_high=1
+                    )
+                )
+                adjustments.append(adjustment)
+
                 adjustment=generation.ImageAdjustment(
                     blur=generation.ImageAdjustment_Gaussian(
                         sigma=32,
