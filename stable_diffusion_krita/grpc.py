@@ -63,7 +63,7 @@ class grpcClient:
         prompt=generation.Prompt( text=p.prompt)
         prompts.append(prompt)
         if (p.negativePrompt):
-            negativePromptParameters=generation.PromptParameters(-1)
+            negativePromptParameters=generation.PromptParameters(weight=-1)
             negativePrompt = generation.Prompt( text=p.negativePrompt,
                 parameters=negativePromptParameters
             )

@@ -706,8 +706,8 @@ def TxtToImage():
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
-        p.restore_faces=data["restore_faces"]
-        p.tiling=data["tiling"]        
+        p.restore_faces=data.get("restore_faces",False)
+        p.tiling=data.get("tiling",False)        
         p.sampling_method=data["sampling_method"]
         p.cfg_value=data["cfg_value"]
         images = runSD(p)
@@ -745,9 +745,9 @@ def ImageToImage():
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
-        p.restore_faces=data["restore_faces"]
+#        p.restore_faces=data["restore_faces"]
         p.sampling_method=data["sampling_method"]
-        p.tiling=data["tiling"]        
+#        p.tiling=data["tiling"]        
         p.cfg_value=data["cfg_value"]
         p.image64=image64
         p.imageBinary=imageBinary
@@ -821,8 +821,8 @@ def Inpainting():
         p.steps=data["steps"]
         p.seed=data["seed"]
         p.num=data["num"]
-        p.restore_faces=data["restore_faces"]
-        p.tiling=data["tiling"]
+#        p.restore_faces=data.get("restore_faces",False)
+#        p.tiling=data.get("tiling",False)
         p.cfg_value=data["cfg_value"]
         p.strength=data["strength"]
         p.sampling_method=data["sampling_method"]
