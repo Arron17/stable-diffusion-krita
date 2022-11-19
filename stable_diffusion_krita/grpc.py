@@ -59,6 +59,12 @@ class grpcClient:
         msgBox.exec()     
     async def runSD(self,p):
         SDConfig=self.SDConfig
+        #Adding section to create values needed for CLIP Guidance
+        guidance_preset: generation.GuidancePreset = generation.GUIDANCE_PRESET_NONE
+        guidance_cuts: int = 0,
+        guidance_models: List[str] = None
+        guidance_cuts: int = 0
+        guidance_prompt: Union[str, generation.Prompt] = None
         prompts: List[generation.Prompt] = []
         prompt=generation.Prompt( text=p.prompt)
         prompts.append(prompt)
@@ -124,27 +130,73 @@ class grpcClient:
             if (not p.maskImageBinary): start=1-float(p.strength)
             if (p.mode=="inpainting_original"):
                 start=float(p.strength)            
-            sp=generation.ScheduleParameters(start=start)
-            step = generation.StepParameter(
-                scaled_step=0,
-                sampler=generation.SamplerParameters(cfg_scale=p.cfg_value),
-                schedule=sp
-            )     
+            step_parameters = dict(
+                        scaled_step=0,
+                        sampler=generation.SamplerParameters(cfg_scale=p.cfg_value)
+                        )
+            step_parameters['schedule'] = generation.ScheduleParameters(start=start)     
         else:    
-            step = generation.StepParameter(
-                scaled_step=0,
-                sampler=generation.SamplerParameters(cfg_scale=p.cfg_value)
-            )           
+             step_parameters = dict(
+                        scaled_step=0,
+                        sampler=generation.SamplerParameters(cfg_scale=p.cfg_value)
+                            )
+        
+        if guidance_prompt:
+            if isinstance(guidance_prompt, str):
+                guidance_prompt = generation.Prompt(text=p.prompt)
+            elif not isinstance(guidance_prompt, generation.Prompt):
+                raise ValueError("guidance_prompt must be a string or Prompt object")                  
+        
+        if p.guidance_strength==0:
+            p.guidance_strength = None
+        # Build our CLIP parameters
+        if guidance_preset is not generation.GUIDANCE_PRESET_NONE or p.guidance_strength is not None:
+            # to do: make it so user can override this
+            # step_parameters['sampler']=None
+
+            if guidance_models:
+                guiders = [generation.Model(alias=model) for model in guidance_models]
+            else:
+                guiders = None
+
+            if guidance_cuts:
+                cutouts = generation.CutoutParameters(count=guidance_cuts)
+            else:
+                cutouts = None
+
+            step_parameters["guidance"] = generation.GuidanceParameters(
+                guidance_preset=guidance_preset,
+                instances=[
+                    generation.GuidanceInstanceParameters(
+                        guidance_strength=p.guidance_strength,
+                        models=guiders,
+                        cutouts=cutouts,
+                        prompt=guidance_prompt,
+                    )
+                ],
+            )                    
+        
         request_id = str(random.randrange(0, 4294967295))
-        image = generation.ImageParameters(
-            width=int(SDConfig.width),
-            height=int(SDConfig.height),
-            steps=int(p.steps),
-            samples=int(p.num),
-            seed=seed,
-            transform=transform,
-            parameters=[step]
-        )
+        if SDConfig.fixed_res==2:
+            image = generation.ImageParameters(
+                width=int(SDConfig.width),
+                height=int(SDConfig.height),
+                steps=int(p.steps),
+                samples=int(p.num),
+                seed=seed,
+                transform=transform,
+                parameters=[generation.StepParameter(**step_parameters)],
+            )
+        elif SDConfig.fixed_res==0:
+            image = generation.ImageParameters(
+                width=int(p.cust_width),
+                height=int(p.cust_height),
+                steps=int(p.steps),
+                samples=int(p.num),
+                seed=seed,
+                transform=transform,
+                parameters=[generation.StepParameter(**step_parameters)],
+            )    
         request=generation.Request(
             engine_id=SDConfig.model,
             request_id=request_id,

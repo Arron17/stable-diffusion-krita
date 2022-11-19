@@ -65,7 +65,8 @@ class SDConfig:
     inpaint_mask_blur=4
     inpaint_mask_content="latent noise"     
     width=512
-    height=512    
+    height=512
+    fixed_res = 2   #New value used to detect if the fixed res box has been ticked
     dlgData={
         "mode": "txt2img",
         "prompt": "",
@@ -75,6 +76,7 @@ class SDConfig:
         "num": 2,
         "modifiers": "highly detailed\n",
         "cfg_value": 7.5,
+        "guidance_strength": 0.618,     #Config value for the CLIP Guidance Strength
         "strength": .75,
         "sampling_method":"LMS"
     }
@@ -84,6 +86,7 @@ class SDConfig:
         obj={"url":self.url,"type":self.type,"token":self.token,"model":self.model,"engines":self.engines,
         "inpaint_mask_blur":self.inpaint_mask_blur, "inpaint_mask_content":self.inpaint_mask_content,
         "width":self.width, "height":self.height,
+        "fixed_res":self.fixed_res,
         "type": self.type,
         "dlgData":self.dlgData}
         return json.dumps(obj)
@@ -99,6 +102,7 @@ class SDConfig:
         self.inpaint_mask_content=obj.get("inpaint_mask_content","latent noise")
         self.width=obj.get("width",512)
         self.height=obj.get("height",512)
+        self.fixed_res=obj.get("fixed_res",2)
     def save(self):
         str=self.serialize(self)
         Krita.instance().writeSetting ("SDPlugin", "Config", str)
@@ -138,9 +142,12 @@ class SDParameters:
     inpaint_mask_content="latent noise" 
     mode="txt2img"
     cfg_value=7.5
-    strength = 1 
+    strength = 1
+    guidance_strength=0.618 #CLIP Guidance Strength
     tiling = False
-    restore_faces =False 
+    restore_faces =False
+    cust_width=0    #Two custom values used for Text to Image to send a custom height and width to GRPC
+    cust_height=0
 
 def errorMessage(text,detailed):
     msgBox= QMessageBox()
@@ -223,6 +230,15 @@ class SDConfigDialog(QDialog):
 
         self.layout.addLayout(h_layout_size)
         self.layout.addWidget(QLabel(''))
+        
+        #Add Checkbox to choose Fixed Res
+        checkBoxLayout = QHBoxLayout()
+        self.fixed_res=QCheckBox("Use Set Resolution (Unticking this box will cause SD to render images at the size of your selection box")
+        self.fixed_res.setChecked(int(SDConfig.fixed_res)) #Get the current state from the Config
+        self.fixed_res.setToolTip('Ticking this box will use the resolution set above, unticking will use the size of your selection box')
+        checkBoxLayout.addWidget(self.fixed_res)
+        self.layout.addLayout(checkBoxLayout)
+        self.layout.addWidget(QLabel('Warning: If you do not use a fixed res setting your selection box too small will cause bad generations and setting the box too high may cause you to run out a VRAM'))
         self.layout.addWidget(QLabel(''))
 
         self.layout.addWidget(self.buttonBox)
@@ -236,6 +252,7 @@ class SDConfigDialog(QDialog):
         SDConfig.width=int(self.width.text())
         SDConfig.height=int(self.height.text())
         SDConfig.type=self.type.currentText()
+        SDConfig.fixed_res=int(self.fixed_res.checkState())  #Save state of checkbox
         if (SDConfig.type=="SDGRPC"):
             client=grpcClient(SDConfig,"")
             model=self.model.currentText()
@@ -407,6 +424,12 @@ class SDDialog(QDialog):
         cfg_label.setToolTip("how strongly the image should follow the prompt")
         formLayout.addWidget(cfg_label)        
         self.cfg_value=self.addSlider(formLayout,data["cfg_value"]*10,10,300,5,10)
+        
+        #Adding CLIP Slider
+        clip_label=QLabel("CLIP Guidance")
+        clip_label.setToolTip("Set a value for CLIP Guidance Strength")
+        formLayout.addWidget(clip_label)
+        self.guidance_strength=self.addSlider(formLayout,data["guidance_strength"]*1000,0,1000,1,1000)
 
    
         cfg_label=QLabel("Sampling method")
@@ -449,6 +472,7 @@ class SDDialog(QDialog):
         SDConfig.dlgData["seed"]=self.seed.text()
         SDConfig.dlgData["num"]=int(self.num.value())
         SDConfig.dlgData["cfg_value"]=self.cfg_value.value()/10
+        SDConfig.dlgData["guidance_strength"]=self.guidance_strength.value()/1000 #CLIP Slider
         SDConfig.dlgData["modifiers"]=self.modifiers.toPlainText()
         SDConfig.dlgData["sampling_method"]=self.sampling_method.currentText()
         if (SDConfig.type=="SDLocal" and SDConfig.dlgData["mode"]=="txt2img"):
@@ -469,7 +493,15 @@ def selectImage(p: SDParameters,qImg):
     root.addChildNode(n, None)
 
     if (p.mode=="img2img" or p.mode=="inpainting"):
-        qImg = qImg.scaled(s.width(), s.height())
+        #Force selection box to be divisible by 8
+        if SDConfig.fixed_res==0:
+            w = s.width()    
+            h = s.height()    
+            w = int(w / 8 + 0.5) * 8
+            h = int(h / 8 + 0.5) * 8
+            qImg = qImg.scaled(w, h)
+        elif SDConfig.fixed_res==2:
+            qImg = qImg.scaled(s.width(), s.height())
     else:
         qImg = qImg.scaled(s.width(), s.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
@@ -686,7 +718,9 @@ def getNegativePrompt(dlg):
     list=dlg.modifiers.toPlainText().split("\n")
     for i in range(0,len(list)):
         m=list[i]
-        if (m and m[0]=="-"): negativePrompt+=", "+m
+        if (m and m[0]=="-"): 
+            m = m[1:]           #remove the first character (-) from the prompt
+            negativePrompt+=m   #don't bother adding a (,) on as this is never going to be added anywhere but the negative
     return negativePrompt
 
 def TxtToImage():
@@ -710,6 +744,14 @@ def TxtToImage():
         p.tiling=data.get("tiling",False)        
         p.sampling_method=data["sampling_method"]
         p.cfg_value=data["cfg_value"]
+        p.guidance_strength=data["guidance_strength"]
+        if SDConfig.fixed_res==0:
+            w = s.width()    
+            h = s.height()    
+            w = int(w / 8 + 0.5) * 8
+            h = int(h / 8 + 0.5) * 8
+            p.cust_width=w
+            p.cust_height=h
         images = runSD(p)
         imageResultDialog( images,p)
 
@@ -718,10 +760,22 @@ def ImageToImage():
     s=getSelection()
     if (s==None):   return    
     n=getLayer()     
-    data=n.pixelData(s.x(),s.y(),s.width(),s.height())
-    image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
-    if (s.width()>512 or s.height()>512):   # max 512x512
-        image = image.scaled(512,512, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    
+    if SDConfig.fixed_res==0:
+        #Force selection box to be divisible by 8
+        w = s.width()    
+        h = s.height()    
+        w = int(w / 8 + 0.5) * 8
+        h = int(h / 8 + 0.5) * 8
+        
+        data=n.pixelData(s.x(),s.y(),w,h)
+        image=QImage(data.data(),w,h,QImage.Format_RGBA8888).rgbSwapped()
+        image = image.scaled(w,h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    elif SDConfig.fixed_res==2:
+        data=n.pixelData(s.x(),s.y(),s.width(),s.height())
+        image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
+        image = image.scaled(SDConfig.width,SDConfig.height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        
     data = QByteArray()
     buf = QBuffer(data)
     image.save(buf, 'PNG')
@@ -749,6 +803,7 @@ def ImageToImage():
         p.sampling_method=data["sampling_method"]
 #        p.tiling=data["tiling"]        
         p.cfg_value=data["cfg_value"]
+        p.guidance_strength=data["guidance_strength"]
         p.image64=image64
         p.imageBinary=imageBinary
         p.strength=data["strength"]
@@ -757,15 +812,35 @@ def ImageToImage():
 
 
 def Inpainting():    
+    #es = str(SDConfig.fixed_res)
+    #errorMessage(es,"Value of fixed_res")
     n = getLayer()
     if (n==None):  return    
     s=getSelection()
     if (s==None):   return
     d = getDocument()
-    data=d.pixelData(s.x(),s.y(),s.width(),s.height())
-    image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
-
-    image = image.scaled(512,512, Qt.KeepAspectRatio, Qt.SmoothTransformation)        # not using config here
+    
+    if SDConfig.fixed_res==0:
+        #Force selection box to be divisible by 8 (My Code)
+        w = s.width()    
+        h = s.height()    
+        w = int(w / 8 + 0.5) * 8
+        h = int(h / 8 + 0.5) * 8
+        
+        data=d.pixelData(s.x(),s.y(),w,h)
+        image=QImage(data.data(),w,h,QImage.Format_RGBA8888).rgbSwapped()
+        image = image.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation) #My Change
+        errorMessage("Running with Fixed Res UNTicked","bla")
+    elif SDConfig.fixed_res==2:    
+        data=d.pixelData(s.x(),s.y(),s.width(),s.height())
+        image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
+        image = image.scaled(SDConfig.width,SDConfig.height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)        # not using config here
+        errorMessage("Running with Fixed Res Ticked","bla")
+        ish = str(image.height())
+        isw = str(image.width())
+        errorMessage(ish,isw)
+    
+    
     print(image.width(),image.height())        
     data = QByteArray()
     buf = QBuffer(data)
@@ -824,6 +899,7 @@ def Inpainting():
 #        p.restore_faces=data.get("restore_faces",False)
 #        p.tiling=data.get("tiling",False)
         p.cfg_value=data["cfg_value"]
+        p.guidance_strength=data["guidance_strength"]
         p.strength=data["strength"]
         p.sampling_method=data["sampling_method"]
         p.image64=image64
