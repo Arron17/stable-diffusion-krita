@@ -238,7 +238,7 @@ class SDConfigDialog(QDialog):
         self.fixed_res.setToolTip('Ticking this box will use the resolution set above, unticking will use the size of your selection box')
         checkBoxLayout.addWidget(self.fixed_res)
         self.layout.addLayout(checkBoxLayout)
-        self.layout.addWidget(QLabel('Warning: If you do not use a fixed res setting your selection box too small will cause bad generations and setting the box too high may cause you to run out a VRAM'))
+        self.layout.addWidget(QLabel('Warning: If you do not use a fixed res setting your selection box too small will cause bad generations and setting the box too high may cause you to run out of VRAM'))
         self.layout.addWidget(QLabel(''))
 
         self.layout.addWidget(self.buttonBox)
@@ -830,15 +830,10 @@ def Inpainting():
         data=d.pixelData(s.x(),s.y(),w,h)
         image=QImage(data.data(),w,h,QImage.Format_RGBA8888).rgbSwapped()
         image = image.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation) #My Change
-        errorMessage("Running with Fixed Res UNTicked","bla")
     elif SDConfig.fixed_res==2:    
         data=d.pixelData(s.x(),s.y(),s.width(),s.height())
         image=QImage(data.data(),s.width(),s.height(),QImage.Format_RGBA8888).rgbSwapped()
         image = image.scaled(SDConfig.width,SDConfig.height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)        # not using config here
-        errorMessage("Running with Fixed Res Ticked","bla")
-        ish = str(image.height())
-        isw = str(image.width())
-        errorMessage(ish,isw)
     
     
     print(image.width(),image.height())        
