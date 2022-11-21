@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 import asyncio
 import json
+import re
 
 
 
@@ -123,6 +124,7 @@ SDConfig.load(SDConfig)
 class SDParameters:
     "This is Stable Diffusion Parameter Class"     
     prompt = ""
+    promptArray = []
     negativePrompt=""
     steps = 0
     seed = 0
@@ -429,7 +431,7 @@ class SDDialog(QDialog):
         clip_label=QLabel("CLIP Guidance")
         clip_label.setToolTip("Set a value for CLIP Guidance Strength")
         formLayout.addWidget(clip_label)
-        self.guidance_strength=self.addSlider(formLayout,data["guidance_strength"]*1000,0,1000,1,1000)
+        self.guidance_strength=self.addSlider(formLayout,data["guidance_strength"]*1000,0,10000,1,1000)
 
    
         cfg_label=QLabel("Sampling method")
@@ -700,6 +702,7 @@ def getSelection():
     return s      
 
 def getFullPrompt(dlg):
+    promptArray = []
     modifiers=""
     list=dlg.modifiers.toPlainText().split("\n")
     for i in range(0,len(list)):
@@ -712,7 +715,39 @@ def getFullPrompt(dlg):
         errorMessage("Empty prompt","Type some text in prompt input box about what you want to see.")
         return ""
     prompt+=modifiers
-    return prompt
+    
+    splitPrompt = re.split("(\([^\)]+\))", prompt)
+
+    rows, cols = len(splitPrompt),2
+    promptArray = []
+    for i in range(rows):
+        col = []
+        for j in range(cols):
+            col.append(0)
+        promptArray.append(col)
+
+    i = 0 
+    for item in splitPrompt:
+        i += 1
+        brackets = re.search("\([^\)]+\)", str(item)) # if item has brackets it will return a value
+        if brackets is not None:
+            weight = re.findall("\:\d*\.\d*|\:\d*", item) #get the weight
+            if not weight:
+                promptArray[i-1][0] = item
+                promptArray[i-1][1] = "None"
+            else:
+                strweight = re.sub("\:", "", ''.join(weight))
+                if len(weight) != 1:
+                   errorMessage("Incorrect weighted prompt syntax","Prompt formatting should be like (Prompt:1.4), do not put 2 sets of weights inside 1 ()")
+                prompt = re.findall("(?<=\().*?(?=:)", item)
+                promptArray[i-1][0] = ''.join(prompt)
+                promptArray[i-1][1] = strweight
+        elif brackets is None:
+            promptArray[i-1][0] = item
+            promptArray[i-1][1] = "None"
+    
+    return promptArray             
+    
 def getNegativePrompt(dlg):
     negativePrompt=""
     list=dlg.modifiers.toPlainText().split("\n")
@@ -732,8 +767,8 @@ def TxtToImage():
     if dlg.exec():
         dlg.setDlgData()
         p = SDParameters()
-        p.prompt=getFullPrompt(dlg)
-        if not p.prompt: return       
+        p.promptArray=getFullPrompt(dlg)
+        if not p.promptArray: return
         p.negativePrompt=getNegativePrompt(dlg)
         p.mode="txt2img"
         data=SDConfig.dlgData

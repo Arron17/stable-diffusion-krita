@@ -66,8 +66,17 @@ class grpcClient:
         guidance_cuts: int = 0
         guidance_prompt: Union[str, generation.Prompt] = None
         prompts: List[generation.Prompt] = []
-        prompt=generation.Prompt( text=p.prompt)
-        prompts.append(prompt)
+        #prompt=generation.Prompt( text=p.prompt)
+        #prompts.append(prompt)
+        
+        for i in range(len(p.promptArray)):
+            if "None" not in p.promptArray[i][1]:
+                promptGen=generation.Prompt( text=p.promptArray[i][0], parameters=generation.PromptParameters(weight = float(p.promptArray[i][1])))
+                prompts.append(promptGen)
+            else:
+                promptGen=generation.Prompt( text=p.promptArray[i][0])    
+                prompts.append(promptGen)
+        
         if (p.negativePrompt):
             negativePromptParameters=generation.PromptParameters(weight=-1)
             negativePrompt = generation.Prompt( text=p.negativePrompt,
